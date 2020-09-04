@@ -77,20 +77,27 @@ pid_t spawn_bluealsa_server(const char *service, unsigned int timeout, bool fuzz
 	close(fds[1]);
 
 	FILE *f = fdopen(fds[0], "r");
-	char *line = NULL;
+	char *address = NULL;
+	char *ack = NULL;
 	size_t size = 0;
 	ssize_t len;
 
-	if ((len = getline(&line, &size, f)) == -1)
+	/* first line contains env line with system bus address */
+	if ((len = getline(&address, &size, f)) == -1)
 		return -1;
-	if (strncmp(line, "DBUS_SYSTEM_BUS_ADDRESS", 23) == 0) {
-		line[len - 1] = '\0';
-		putenv(line);
+	if (strncmp(address, "DBUS_SYSTEM_BUS_ADDRESS=", 24) == 0) {
+		address[len - 1] = '\0';
+		putenv(address);
 	}
+
+	/* second line acknowledges service name acquisition */
+	if ((len = getline(&ack, &size, f)) == -1 ||
+			strncmp(ack, "BLUEALSA_DBUS_SERVICE_NAME=", 27) != 0)
+		return -1;
+	free(ack);
 
 	pthread_t tid;
 	pthread_create(&tid, NULL, spawn_bluealsa_server_stderr_proxy, f);
 
-	usleep(100000);
 	return pid;
 }

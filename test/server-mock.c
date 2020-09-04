@@ -266,6 +266,23 @@ void *test_bt_mock(void *userdata) {
 	return NULL;
 }
 
+static void dbus_name_acquired(GDBusConnection *conn, const char *name, void *userdata) {
+	(void)conn;
+	GMainLoop *loop = userdata;
+
+	fprintf(stderr, "BLUEALSA_DBUS_SERVICE_NAME=%s\n", name);
+
+	/* emulate dummy test HCI device */
+	assert((a = ba_adapter_new(0)) != NULL);
+
+	/* do not generate lots of data */
+	config.sbc_quality = SBC_QUALITY_LOW;
+
+	/* run actual BlueALSA mock thread */
+	g_thread_new(NULL, test_bt_mock, loop);
+
+}
+
 int main(int argc, char *argv[]) {
 
 	int opt;
@@ -312,16 +329,6 @@ int main(int argc, char *argv[]) {
 	assert(bluealsa_config_init() == 0);
 	assert((config.dbus = g_test_dbus_connection_new_sync(NULL)) != NULL);
 
-	assert(bluealsa_dbus_manager_register(NULL) != 0);
-	assert(g_bus_own_name_on_connection(config.dbus, service,
-				G_BUS_NAME_OWNER_FLAGS_NONE, NULL, NULL, NULL, NULL) != 0);
-
-	/* do not generate lots of data */
-	config.sbc_quality = SBC_QUALITY_LOW;
-
-	/* emulate dummy test HCI device */
-	assert((a = ba_adapter_new(0)) != NULL);
-
 	/* receive EPIPE error code */
 	struct sigaction sigact = { .sa_handler = SIG_IGN };
 	sigaction(SIGPIPE, &sigact, NULL);
@@ -331,12 +338,14 @@ int main(int argc, char *argv[]) {
 	sigaction(SIGUSR1, &sigact, NULL);
 	sigaction(SIGUSR2, &sigact, NULL);
 
+	/* main loop with gracefull termination handlers */
 	GMainLoop *loop = g_main_loop_new(NULL, FALSE);
 	g_unix_signal_add(SIGINT, main_loop_exit_handler, loop);
 	g_unix_signal_add(SIGTERM, main_loop_exit_handler, loop);
 
-	/* run actual BlueALSA mock thread */
-	g_thread_new(NULL, test_bt_mock, loop);
+	assert(bluealsa_dbus_manager_register(NULL) != 0);
+	assert(g_bus_own_name_on_connection(config.dbus, service,
+				G_BUS_NAME_OWNER_FLAGS_NONE, dbus_name_acquired, NULL, loop, NULL) != 0);
 
 	g_main_loop_run(loop);
 
