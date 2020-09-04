@@ -17,17 +17,44 @@
 #include <string.h>
 #include <unistd.h>
 
+struct spawn_bluealsa_data {
+	pthread_mutex_t ready_count_mtx;
+	pthread_cond_t ready_count_updated;
+	unsigned int ready_count_a2dp;
+	unsigned int ready_count_sco;
+	FILE *output;
+};
+
 static char *bin_path = ".";
 
-static void *spawn_bluealsa_server_stderr_proxy(void *data) {
+static void *spawn_bluealsa_server_stderr_proxy(void *userdata) {
 
-	FILE *f = (FILE *)data;
+	struct spawn_bluealsa_data *data = userdata;
 	char buffer[512];
 
-	while (fgets(buffer, sizeof(buffer), f) != NULL)
+	while (fgets(buffer, sizeof(buffer), data->output) != NULL) {
 		fputs(buffer, stderr);
 
-	fclose(f);
+		if (strncmp(buffer, "BLUEALSA_PCM_READY=A2DP:", 24) == 0) {
+			pthread_mutex_lock(&data->ready_count_mtx);
+			data->ready_count_a2dp++;
+			pthread_cond_signal(&data->ready_count_updated);
+			pthread_mutex_unlock(&data->ready_count_mtx);
+		}
+
+		if (strncmp(buffer, "BLUEALSA_PCM_READY=SCO:", 23) == 0) {
+			pthread_mutex_lock(&data->ready_count_mtx);
+			data->ready_count_sco++;
+			pthread_cond_signal(&data->ready_count_updated);
+			pthread_mutex_unlock(&data->ready_count_mtx);
+		}
+
+	}
+
+	pthread_mutex_destroy(&data->ready_count_mtx);
+	pthread_cond_destroy(&data->ready_count_updated);
+	fclose(data->output);
+	free(data);
 	return NULL;
 }
 
@@ -36,11 +63,13 @@ static void *spawn_bluealsa_server_stderr_proxy(void *data) {
  *
  * @param service BlueALSA D-Bus service name.
  * @param timeout Timeout passed to the server-mock.
+ * @param wait_for_ready Block until PCMs are ready.
  * @param fuzzing Enable fuzzing - delayed startup.
  * @param source Start A2DP source.
  * @param sink Start A2DP sink.
  * @return PID of the bluealsa server mock. */
-pid_t spawn_bluealsa_server(const char *service, unsigned int timeout, bool fuzzing, bool source, bool sink) {
+pid_t spawn_bluealsa_server(const char *service, unsigned int timeout,
+	bool wait_for_ready, bool fuzzing, bool source, bool sink) {
 
 	char arg_service[32] = "";
 	if (service != NULL)
@@ -76,14 +105,29 @@ pid_t spawn_bluealsa_server(const char *service, unsigned int timeout, bool fuzz
 
 	close(fds[1]);
 
-	FILE *f = fdopen(fds[0], "r");
+	struct spawn_bluealsa_data *data;
+	unsigned int count_a2dp = 0;
+	unsigned int count_sco = 0;
 	char *address = NULL;
 	char *ack = NULL;
 	size_t size = 0;
 	ssize_t len;
 
+	if (source)
+		count_a2dp += 2;
+	if (sink)
+		count_a2dp += 2;
+
+	if ((data = calloc(1, sizeof(*data))) == NULL)
+		return -1;
+
+	pthread_mutex_init(&data->ready_count_mtx, NULL);
+	pthread_cond_init(&data->ready_count_updated, NULL);
+	if ((data->output = fdopen(fds[0], "r")) == NULL)
+		return -1;
+
 	/* first line contains env line with system bus address */
-	if ((len = getline(&address, &size, f)) == -1)
+	if ((len = getline(&address, &size, data->output)) == -1)
 		return -1;
 	if (strncmp(address, "DBUS_SYSTEM_BUS_ADDRESS=", 24) == 0) {
 		address[len - 1] = '\0';
@@ -91,13 +135,20 @@ pid_t spawn_bluealsa_server(const char *service, unsigned int timeout, bool fuzz
 	}
 
 	/* second line acknowledges service name acquisition */
-	if ((len = getline(&ack, &size, f)) == -1 ||
+	if ((len = getline(&ack, &size, data->output)) == -1 ||
 			strncmp(ack, "BLUEALSA_DBUS_SERVICE_NAME=", 27) != 0)
 		return -1;
 	free(ack);
 
 	pthread_t tid;
-	pthread_create(&tid, NULL, spawn_bluealsa_server_stderr_proxy, f);
+	pthread_create(&tid, NULL, spawn_bluealsa_server_stderr_proxy, data);
+
+	pthread_mutex_lock(&data->ready_count_mtx);
+	while (wait_for_ready && (
+				data->ready_count_a2dp < count_a2dp ||
+				data->ready_count_sco < count_sco))
+		pthread_cond_wait(&data->ready_count_updated, &data->ready_count_mtx);
+	pthread_mutex_unlock(&data->ready_count_mtx);
 
 	return pid;
 }

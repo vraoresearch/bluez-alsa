@@ -171,6 +171,7 @@ static struct ba_transport *test_transport_new_a2dp(struct ba_device *d,
 	if (fuzzing)
 		sleep(1);
 	struct ba_transport *t = ba_transport_new_a2dp(d, type, owner, path, codec, configuration);
+	fprintf(stderr, "BLUEALSA_PCM_READY=A2DP:%s\n", batostr_(&d->addr));
 	t->acquire = test_transport_acquire;
 	t->release = test_transport_release;
 	return t;
@@ -181,6 +182,7 @@ static struct ba_transport *test_transport_new_sco(struct ba_device *d,
 	if (fuzzing)
 		sleep(1);
 	struct ba_transport *t = ba_transport_new_sco(d, type, owner, path, -1);
+	fprintf(stderr, "BLUEALSA_PCM_READY=SCO:%s\n", batostr_(&d->addr));
 	t->acquire = test_transport_acquire;
 	t->release = test_transport_release;
 	return t;
