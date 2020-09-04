@@ -358,7 +358,7 @@ static int bluealsa_stop(snd_pcm_ioplug_t *io) {
 
 	/* Bug in ioplug - if pcm->io_hw_ptr == -1 then it reports state
 	 * SND_PCM_STATE_XRUN instead of SND_PCM_STATE_SETUP after pcm is stopped */
-	pcm->io_hw_ptr = 0; 
+	pcm->io_hw_ptr = 0;
 
 	if (!bluealsa_dbus_pcm_ctrl_send_drop(pcm->ba_pcm_ctrl_fd, NULL))
 		return -errno;
@@ -888,6 +888,7 @@ SND_PCM_PLUGIN_DEFINE_FUNC(bluealsa) {
 
 	int flags = ba_profile | (
 			stream == SND_PCM_STREAM_PLAYBACK ? BA_PCM_FLAG_SINK : BA_PCM_FLAG_SOURCE);
+	debug("Getting BlueALSA PCM: %s %s %s", snd_pcm_stream_name(stream), device, profile);
 	if (!bluealsa_dbus_get_pcm(&pcm->dbus_ctx, &ba_addr, flags, &pcm->ba_pcm, &err)) {
 		SNDERR("Couldn't get BlueALSA PCM: %s", err.message);
 		ret = -ENODEV;
